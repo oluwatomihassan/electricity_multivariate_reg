@@ -1,0 +1,169 @@
+---
+title: 'Electricity Cost Of Oregon Households: Multivariate Regression Analysis'
+author: "Oluwatomi Hassan"
+date: '2022-05-19'
+output: html_document
+---
+
+# importing packages 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(broom)
+library(ggplot2)
+library(Amelia)
+library(tidyr)
+library(car)
+library(leaps) 
+```
+
+
+# Exploratory Data Analysis
+```{r dataset}
+# Reading the Dataset 
+df <- read.csv('./data/OR_acs_house_occ.csv')
+summary(df)
+```
+
+```{r}
+# Checking for missing values 
+sum(is.na(df))
+df$zip <- rownames(df)
+df_long <- gather(df, variable, value, -zip)
+
+qplot(zip, variable, data = df_long, geom= "tile", 
+      fill = is.na(value)) + 
+  scale_fill_manual("missing?" , values = c('TRUE'="black", 'FALSE' = "white")) + 
+  theme (axis.text.x = element_text(angle=90))
+
+```
+
+```{r EDA}
+# Exploratory Data Analysis
+qplot(BLD, ELEP, data=df)
+qplot(BDSP, ELEP, data=df, color = BLD) + facet_wrap(~ BLD, ncol=10)
+qplot(NP, ELEP, data=df, color = BLD) + facet_wrap(~BLD, ncol=10)
+```
+
+# Multiple Regression Explanatory Model 
+
+## Methodology 
+The following regression models are considered to estimate the difference in monthly electricity bill between apartment and houses in Oregon. Let BLD =0 when housing is an apartment and BLD=1 when housing is a house, full model with interactions $(ELEP|BLD,BDSP,NP) = \beta_0 + \beta_1{BLD} + \beta_2{BDSP} + \beta_3{NP} + \beta_4{(BLD * NP)} + \beta_5{(BLD * BDSP)} + \beta_6{(BLD * BDSP * NP)}$ is compared to the reduced model without interactions terms $(ELEP|BLD,BDSP,NP) = \beta_0 + \beta_1{BLD} + \beta_2{BDSP} + \beta_3{NP}$. The comparison of the full model to the reduced model suggest that the full model is the more appropriate model(Extra SS F-test, p-value=0.0008967). Insignificant interaction terms and three-variable interaction terms are removed from the model to decrease noise and over-fitting. The model $\mu(ELEP|BLD,BDSP,NP) = \beta_0 + \beta_1{BLD} + \beta_2{BDSP} + \beta_3{NP} + \beta_4{(BDSP * NP)} + \beta_5{(BLD * BDSP)}$ is considered after model training. AIC and BIC values comparison of this proposed model to the reduced model without interaction terms suggest that the reduced model is the more appropriate model for this study. 
+
+
+```{r}
+# Cleaning the dataframe
+df$HA <- "other" # Initialize everything to "other"
+df$HA[which(grepl("house",df$BLD))] <- "house"
+df$HA[which(grepl("apartment",df$BLD,ignore.case=TRUE))] <- "apt"
+
+new_df <- subset(df, HA!="other" )
+head(new_df)
+
+```
+```{r}
+ # fitting rich model with interactions
+exp_fit_int <- lm(ELEP ~ HA * BDSP * NP ,  data= new_df )
+summary(exp_fit_int)
+```
+
+```{r}
+# Residual Plots for full model with interactions. 
+exp_fit_aug <- broom::augment(exp_fit_int, data = new_df)
+qplot(.fitted, .resid, data = exp_fit_aug)
+qplot(BLD, .resid, data =exp_fit_aug)
+qplot(NP, .resid, data =exp_fit_aug)
+qplot(BDSP, .resid, data =exp_fit_aug)
+```
+
+```{r}
+# Fitting Model without interactions
+exp_fit<- lm(ELEP ~ HA + BDSP + NP ,  data= new_df )
+summary(exp_fit)
+# checkinfg for multicollinearity
+corr <- vif(exp_fit)
+barplot(corr, main = "VIF Values", horiz= TRUE, col = "blue")
+abline(v=5, lwd=3, lty=2)
+```
+
+```{r}
+# Comparing model with and without interactions
+anova(exp_fit, exp_fit_int)
+```
+
+```{r}
+# Fitting regression model with some interactions
+exp_fit_2 <- lm(ELEP ~ HA + BDSP * NP + HA:BDSP , data= new_df )
+summary(exp_fit_2)
+```
+
+```{r}
+# comparing model without interaction and considered model above.
+anova(exp_fit, exp_fit_2)
+AIC(exp_fit, exp_fit_2)
+BIC(exp_fit, exp_fit_2)
+```
+```{r}
+# Extracting estimates and CI of model without interactions. 
+summary(exp_fit)$coefficients
+confint(exp_fit)
+```
+
+Using the American Community survey for household survey, Multiple linear regression was used to extrapolate the average difference in monthly electricity bill for people in apartment when compared to those in houses in Oregon. The fitted regression model is: Let BLD =0 when housing is an apartment  and BLD=1 when housing is a house $\mu(ELEP|BLD,BDSP,NP) = \beta_0 + \beta_1{BLD} + \beta_2{BDSP} + \beta_3{NP}$. It was estimated that people in apartments receive an average monthly electricity bill of 19.5 dollars less than those in houses in Oregon after accounting for number of occupants and bedrooms. With 95% confidence, the average difference in monthly electricity bill for apartments and houses with fixed number of occupants and bedrooms is between 15.96 and 22.99 dollars, respectively. 
+ 
+
+# Multiple Regression Prediction Model 
+
+## Methodology 
+Multiple regression on the American Community Survey for household in Oregon dataset is used to predict the electricity cost for households in Oregon. Examination of the data shows missing values in ACR and VALR variables. These variables are removed from the dataset because they add minimum information to predicting electricity cost. The variable SERIALNO is not included in the model because it is a unique identifier value that adds no additional information to the model. The variable TYPE is not included in the predictive model because of its collinearity to other predictor variables adds little additional information to the model. To propose a set of models with fewer predictor variable, the forward step-wise variable variable selection and 10-fold cross validation method is used. used. Using root mean squared error(RMSE) as the metric for model evaluation, the simpler model with the smallest variable model within one standard error of the lowest RMSE is selected as the model of interest. 
+
+
+```{r}
+df1 <- read.csv('./data/OR_acs_house_occ.csv', stringsAsFactors = TRUE, skipNul=TRUE)
+head(df1)
+new_df1 <- subset(df1, select = -c(ACR, SERIALNO, TYPE, VALP))
+```
+
+
+```{r}
+# 10-fold cross-validation with Forward Step-wise variable selection.
+predict.regsubsets <- function(object, newdata, id, ...){
+  form <-as.formula(object$call[[2]])
+  mat <- model.matrix(form, newdata)
+  coefi <- coef(object, id=id)
+  xvars <- names(coefi)
+  mat[,xvars]%*%coefi
+}
+k <- 10
+set.seed(1)
+folds <- sample(1:k, nrow(new_df1), replace=TRUE)
+cv.errors <- matrix(NA, k, 45, dimnames = list(NULL, paste(1:45)))
+for (j in 1:k){
+  best.fit <- regsubsets(ELEP ~ ., data=new_df1[folds!=j,], really.big= TRUE, method='forward',nvmax=45)
+  for(i in 1:45){
+    pred <- predict(best.fit, new_df1[folds==j,], id=i)
+    cv.errors[j,i] <- mean((new_df1$ELEP[folds==j]-pred)^2)
+  }}
+mean.cv.errors <-apply(cv.errors, 2, mean)
+RMSE <- sqrt(mean.cv.errors)
+RMSE
+```
+
+```{r} 
+# plotting RMSE errors with one standard error line.
+par(mfrow=c(1,1))
+plot(RMSE, type='b')
+se_line <- min(RMSE) + (sd(RMSE)/sqrt(k))
+which.min(RMSE)
+points(24, RMSE[24], col='red', cex=2, pch=20)
+points(8, RMSE[8], col='blue', cex=2, pch=20)
+abline(h=se_line)
+```
+
+```{r}
+# Obtaining eight-variable model.
+reg.best <-regsubsets(ELEP ~ ., data=new_df1, really.big= TRUE, method='forward',nvmax=45)
+coef(reg.best, 8)
+```
+Using forward step-wise variable selection and 10-fold cross-validation method, the 24 variable model has the lowest RMSE value of 66.401. Models within one standard error of the lowest RMSE are considered. The eight-variable model is the smallest variable model within one standard error of the lowest RMSE. The variable of interests are number of persons(NP), number of bedrooms(BDSP), units in structure(BLD), gas(GASP), house heating fuel(HFL), and number of rooms(RMSP). The model to predict electricity costs for households in Oregon is $$ \mu(ELEP) = \beta_0 + \beta_1{NP} + \beta_2{BDSP} + \beta_3{GASP} + \beta_4{RMSP} + BLD + HFL $$.
+
+For the explanatory model, a set of model with chosen variables of interest is considered for estimating the electricity bill cost of apartment compared to houses. The full model with interaction is compared to the reduced model without interactions with Extra Sums of Squares Test. To compare the considered model with selected interactions is compared to the reduced model without interactions with AIC and BIC values. Using these comparison method, the most appropriate model is the reduced model and used to estimate the difference between electricity bill of apartment and houses in Oregon. For the predictive model, forward step-wise variable selection performed with regsubsets is used to select a set of appropriate model. For validation, the 10-fold cross validation is used to compare the possible models. The smallest variable model within one standard error of the smallest RMSE is selected as the most appropriate model. The forward step-wise selection is performed on the full data set to obtain the eight-variable model. The different approaches are required because of the different goal of an explanatory and predictive model in terms of interpreting coefficient estimates and variance. In an explanatory model, variable selection can lead to bias and invalid interpretation. For predictive models, variable selection is appropriate for high dimensional data to decrease noise and over-fitting in the mode.
